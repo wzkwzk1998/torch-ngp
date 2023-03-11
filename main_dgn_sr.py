@@ -10,6 +10,9 @@ from functools import partial
 from loss import huber_loss
 
 #torch.autograd.set_detect_anomaly(True)
+'''
+diffusion guided nerf for super resolution
+'''
 
 if __name__ == '__main__':
 

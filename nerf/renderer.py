@@ -283,9 +283,11 @@ class NeRFRenderer(nn.Module):
             counter.zero_() # set to 0
             self.local_step += 1
 
-            xyzs, dirs, deltas, rays = raymarching.march_rays_train(rays_o, rays_d, self.bound, self.density_bitfield, self.cascade, self.grid_size, nears, fars, counter, self.mean_count, perturb, 128, force_all_rays, dt_gamma, max_steps)
+            # ray matching old
+            # xyzs, dirs, deltas, rays = raymarching.march_rays_train(rays_o, rays_d, self.bound, self.density_bitfield, self.cascade, self.grid_size, nears, fars, counter, self.mean_count, perturb, 128, force_all_rays, dt_gamma, max_steps)
 
             #plot_pointcloud(xyzs.reshape(-1, 3).detach().cpu().numpy())
+            xyzs, dirs, deltas, rays = raymarching.march_rays_train(rays_o, rays_d, self.bound, self.density_bitfield, self.cascade, self.grid_size, nears, fars, perturb, dt_gamma, max_steps)
             
             sigmas, rgbs = self(xyzs, dirs)
             # density_outputs = self.density(xyzs) # [M,], use a dict since it may include extra things, like geo_feat for rgb.
@@ -301,7 +303,9 @@ class NeRFRenderer(nn.Module):
                 depths = []
                 images = []
                 for k in range(K):
-                    weights_sum, depth, image = raymarching.composite_rays_train(sigmas[k], rgbs[k], deltas, rays, T_thresh)
+                    # old raymarching
+                    # weights, weights_sum, depth, image = raymarching.composite_rays_train(sigmas[k], rgbs[k], deltas, rays, T_thresh)
+                    weights, weights_sum, depth, image = raymarching.composite_rays_train(sigmas[k], rgbs[k], deltas, rays, T_thresh)
                     image = image + (1 - weights_sum).unsqueeze(-1) * bg_color
                     depth = torch.clamp(depth - nears, min=0) / (fars - nears)
                     images.append(image.view(*prefix, 3))
@@ -311,8 +315,9 @@ class NeRFRenderer(nn.Module):
                 image = torch.stack(images, axis=0) # [K, B, N, 3]
 
             else:
-
-                weights_sum, depth, image = raymarching.composite_rays_train(sigmas, rgbs, deltas, rays, T_thresh)
+                # old  raymarching
+                # weights_sum, depth, image = raymarching.composite_rays_train(sigmas, rgbs, deltas, rays, T_thresh)
+                weights, weights_sum, depth, image = raymarching.composite_rays_train(sigmas, rgbs, deltas, rays, T_thresh)
                 image = image + (1 - weights_sum).unsqueeze(-1) * bg_color
                 depth = torch.clamp(depth - nears, min=0) / (fars - nears)
                 image = image.view(*prefix, 3)
@@ -350,7 +355,9 @@ class NeRFRenderer(nn.Module):
                 # decide compact_steps
                 n_step = max(min(N // n_alive, 8), 1)
 
-                xyzs, dirs, deltas = raymarching.march_rays(n_alive, n_step, rays_alive, rays_t, rays_o, rays_d, self.bound, self.density_bitfield, self.cascade, self.grid_size, nears, fars, 128, perturb if step == 0 else False, dt_gamma, max_steps)
+                # old march_rays
+                # xyzs, dirs, deltas = raymarching.march_rays(n_alive, n_step, rays_alive, rays_t, rays_o, rays_d, self.bound, self.density_bitfield, self.cascade, self.grid_size, nears, fars, 128, perturb if step == 0 else False, dt_gamma, max_steps)
+                xyzs, dirs, deltas = raymarching.march_rays(n_alive, n_step, rays_alive, rays_t, rays_o, rays_d, self.bound, self.density_bitfield, self.cascade, self.grid_size, nears, fars, perturb if step == 0 else False, dt_gamma, max_steps)
 
                 sigmas, rgbs = self(xyzs, dirs)
                 # density_outputs = self.density(xyzs) # [M,], use a dict since it may include extra things, like geo_feat for rgb.
@@ -441,6 +448,102 @@ class NeRFRenderer(nn.Module):
 
         print(f'[mark untrained grid] {(count == 0).sum()} from {self.grid_size ** 3 * self.cascade}')
 
+    # @torch.no_grad()
+    # def update_extra_state(self, decay=0.95, S=128):
+    #     # call before each epoch to update extra states.
+
+    #     if not self.cuda_ray:
+    #         return 
+        
+    #     ### update density grid
+
+    #     tmp_grid = - torch.ones_like(self.density_grid)
+        
+    #     # full update.
+    #     if self.iter_density < 16:
+    #     #if True:
+    #         X = torch.arange(self.grid_size, dtype=torch.int32, device=self.density_bitfield.device).split(S)
+    #         Y = torch.arange(self.grid_size, dtype=torch.int32, device=self.density_bitfield.device).split(S)
+    #         Z = torch.arange(self.grid_size, dtype=torch.int32, device=self.density_bitfield.device).split(S)
+
+    #         for xs in X:
+    #             for ys in Y:
+    #                 for zs in Z:
+                        
+    #                     # construct points
+    #                     xx, yy, zz = custom_meshgrid(xs, ys, zs)
+    #                     coords = torch.cat([xx.reshape(-1, 1), yy.reshape(-1, 1), zz.reshape(-1, 1)], dim=-1) # [N, 3], in [0, 128)
+    #                     indices = raymarching.morton3D(coords).long() # [N]
+    #                     xyzs = 2 * coords.float() / (self.grid_size - 1) - 1 # [N, 3] in [-1, 1]
+
+    #                     # cascading
+    #                     for cas in range(self.cascade):
+    #                         bound = min(2 ** cas, self.bound)
+    #                         half_grid_size = bound / self.grid_size
+    #                         # scale to current cascade's resolution
+    #                         cas_xyzs = xyzs * (bound - half_grid_size)
+    #                         # add noise in [-hgs, hgs]
+    #                         cas_xyzs += (torch.rand_like(cas_xyzs) * 2 - 1) * half_grid_size
+    #                         # query density
+    #                         sigmas = self.density(cas_xyzs)['sigma'].reshape(-1).detach()
+    #                         sigmas *= self.density_scale
+    #                         # assign 
+    #                         tmp_grid[cas, indices] = sigmas
+
+    #     # partial update (half the computation)
+    #     # TODO: why no need of maxpool ?
+    #     else:
+    #         N = self.grid_size ** 3 // 4 # H * H * H / 4
+    #         for cas in range(self.cascade):
+    #             # random sample some positions
+    #             coords = torch.randint(0, self.grid_size, (N, 3), device=self.density_bitfield.device) # [N, 3], in [0, 128)
+    #             indices = raymarching.morton3D(coords).long() # [N]
+    #             # random sample occupied positions
+    #             occ_indices = torch.nonzero(self.density_grid[cas] > 0).squeeze(-1) # [Nz]
+    #             rand_mask = torch.randint(0, occ_indices.shape[0], [N], dtype=torch.long, device=self.density_bitfield.device)
+    #             occ_indices = occ_indices[rand_mask] # [Nz] --> [N], allow for duplication
+    #             occ_coords = raymarching.morton3D_invert(occ_indices) # [N, 3]
+    #             # concat
+    #             indices = torch.cat([indices, occ_indices], dim=0)
+    #             coords = torch.cat([coords, occ_coords], dim=0)
+    #             # same below
+    #             xyzs = 2 * coords.float() / (self.grid_size - 1) - 1 # [N, 3] in [-1, 1]
+    #             bound = min(2 ** cas, self.bound)
+    #             half_grid_size = bound / self.grid_size
+    #             # scale to current cascade's resolution
+    #             cas_xyzs = xyzs * (bound - half_grid_size)
+    #             # add noise in [-hgs, hgs]
+    #             cas_xyzs += (torch.rand_like(cas_xyzs) * 2 - 1) * half_grid_size
+    #             # query density
+    #             sigmas = self.density(cas_xyzs)['sigma'].reshape(-1).detach()
+    #             sigmas *= self.density_scale
+    #             # assign 
+    #             tmp_grid[cas, indices] = sigmas
+
+    #     ## max-pool on tmp_grid for less aggressive culling [No significant improvement...]
+    #     # invalid_mask = tmp_grid < 0
+    #     # tmp_grid = F.max_pool3d(tmp_grid.view(self.cascade, 1, self.grid_size, self.grid_size, self.grid_size), kernel_size=3, stride=1, padding=1).view(self.cascade, -1)
+    #     # tmp_grid[invalid_mask] = -1
+
+    #     # ema update
+    #     valid_mask = (self.density_grid >= 0) & (tmp_grid >= 0)
+    #     self.density_grid[valid_mask] = torch.maximum(self.density_grid[valid_mask] * decay, tmp_grid[valid_mask])
+    #     self.mean_density = torch.mean(self.density_grid.clamp(min=0)).item() # -1 regions are viewed as 0 density.
+    #     self.iter_density += 1
+
+    #     # convert to bitfield
+    #     density_thresh = min(self.mean_density, self.density_thresh)
+    #     self.density_bitfield = raymarching.packbits(self.density_grid, density_thresh, self.density_bitfield)
+
+    #     ### update step counter
+    #     total_step = min(16, self.local_step)
+    #     if total_step > 0:
+    #         self.mean_count = int(self.step_counter[:total_step, 0].sum().item() / total_step)
+    #     self.local_step = 0
+
+        #print(f'[density grid] min={self.density_grid.min().item():.4f}, max={self.density_grid.max().item():.4f}, mean={self.mean_density:.4f}, occ_rate={(self.density_grid > 0.01).sum() / (128**3 * self.cascade):.3f} | [step counter] mean={self.mean_count}')
+
+
     @torch.no_grad()
     def update_extra_state(self, decay=0.95, S=128):
         # call before each epoch to update extra states.
@@ -449,80 +552,39 @@ class NeRFRenderer(nn.Module):
             return 
         
         ### update density grid
-
         tmp_grid = - torch.ones_like(self.density_grid)
         
-        # full update.
-        if self.iter_density < 16:
-        #if True:
-            X = torch.arange(self.grid_size, dtype=torch.int32, device=self.density_bitfield.device).split(S)
-            Y = torch.arange(self.grid_size, dtype=torch.int32, device=self.density_bitfield.device).split(S)
-            Z = torch.arange(self.grid_size, dtype=torch.int32, device=self.density_bitfield.device).split(S)
+        X = torch.arange(self.grid_size, dtype=torch.int32, device=self.aabb_train.device).split(S)
+        Y = torch.arange(self.grid_size, dtype=torch.int32, device=self.aabb_train.device).split(S)
+        Z = torch.arange(self.grid_size, dtype=torch.int32, device=self.aabb_train.device).split(S)
 
-            for xs in X:
-                for ys in Y:
-                    for zs in Z:
-                        
-                        # construct points
-                        xx, yy, zz = custom_meshgrid(xs, ys, zs)
-                        coords = torch.cat([xx.reshape(-1, 1), yy.reshape(-1, 1), zz.reshape(-1, 1)], dim=-1) # [N, 3], in [0, 128)
-                        indices = raymarching.morton3D(coords).long() # [N]
-                        xyzs = 2 * coords.float() / (self.grid_size - 1) - 1 # [N, 3] in [-1, 1]
+        for xs in X:
+            for ys in Y:
+                for zs in Z:
+                    
+                    # construct points
+                    xx, yy, zz = custom_meshgrid(xs, ys, zs)
+                    coords = torch.cat([xx.reshape(-1, 1), yy.reshape(-1, 1), zz.reshape(-1, 1)], dim=-1) # [N, 3], in [0, 128)
+                    indices = raymarching.morton3D(coords).long() # [N]
+                    xyzs = 2 * coords.float() / (self.grid_size - 1) - 1 # [N, 3] in [-1, 1]
 
-                        # cascading
-                        for cas in range(self.cascade):
-                            bound = min(2 ** cas, self.bound)
-                            half_grid_size = bound / self.grid_size
-                            # scale to current cascade's resolution
-                            cas_xyzs = xyzs * (bound - half_grid_size)
-                            # add noise in [-hgs, hgs]
-                            cas_xyzs += (torch.rand_like(cas_xyzs) * 2 - 1) * half_grid_size
-                            # query density
-                            sigmas = self.density(cas_xyzs)['sigma'].reshape(-1).detach()
-                            sigmas *= self.density_scale
-                            # assign 
-                            tmp_grid[cas, indices] = sigmas
-
-        # partial update (half the computation)
-        # TODO: why no need of maxpool ?
-        else:
-            N = self.grid_size ** 3 // 4 # H * H * H / 4
-            for cas in range(self.cascade):
-                # random sample some positions
-                coords = torch.randint(0, self.grid_size, (N, 3), device=self.density_bitfield.device) # [N, 3], in [0, 128)
-                indices = raymarching.morton3D(coords).long() # [N]
-                # random sample occupied positions
-                occ_indices = torch.nonzero(self.density_grid[cas] > 0).squeeze(-1) # [Nz]
-                rand_mask = torch.randint(0, occ_indices.shape[0], [N], dtype=torch.long, device=self.density_bitfield.device)
-                occ_indices = occ_indices[rand_mask] # [Nz] --> [N], allow for duplication
-                occ_coords = raymarching.morton3D_invert(occ_indices) # [N, 3]
-                # concat
-                indices = torch.cat([indices, occ_indices], dim=0)
-                coords = torch.cat([coords, occ_coords], dim=0)
-                # same below
-                xyzs = 2 * coords.float() / (self.grid_size - 1) - 1 # [N, 3] in [-1, 1]
-                bound = min(2 ** cas, self.bound)
-                half_grid_size = bound / self.grid_size
-                # scale to current cascade's resolution
-                cas_xyzs = xyzs * (bound - half_grid_size)
-                # add noise in [-hgs, hgs]
-                cas_xyzs += (torch.rand_like(cas_xyzs) * 2 - 1) * half_grid_size
-                # query density
-                sigmas = self.density(cas_xyzs)['sigma'].reshape(-1).detach()
-                sigmas *= self.density_scale
-                # assign 
-                tmp_grid[cas, indices] = sigmas
-
-        ## max-pool on tmp_grid for less aggressive culling [No significant improvement...]
-        # invalid_mask = tmp_grid < 0
-        # tmp_grid = F.max_pool3d(tmp_grid.view(self.cascade, 1, self.grid_size, self.grid_size, self.grid_size), kernel_size=3, stride=1, padding=1).view(self.cascade, -1)
-        # tmp_grid[invalid_mask] = -1
-
+                    # cascading
+                    for cas in range(self.cascade):
+                        bound = min(2 ** cas, self.bound)
+                        half_grid_size = bound / self.grid_size
+                        # scale to current cascade's resolution
+                        cas_xyzs = xyzs * (bound - half_grid_size)
+                        # add noise in [-hgs, hgs]
+                        cas_xyzs += (torch.rand_like(cas_xyzs) * 2 - 1) * half_grid_size
+                        # query density
+                        sigmas = self.density(cas_xyzs)['sigma'].reshape(-1).detach()
+                        # assign 
+                        tmp_grid[cas, indices] = sigmas
+        
         # ema update
-        valid_mask = (self.density_grid >= 0) & (tmp_grid >= 0)
+        valid_mask = self.density_grid >= 0
         self.density_grid[valid_mask] = torch.maximum(self.density_grid[valid_mask] * decay, tmp_grid[valid_mask])
-        self.mean_density = torch.mean(self.density_grid.clamp(min=0)).item() # -1 regions are viewed as 0 density.
-        #self.mean_density = torch.mean(self.density_grid[self.density_grid > 0]).item() # do not count -1 regions
+        self.mean_density = torch.mean(self.density_grid[valid_mask]).item()
         self.iter_density += 1
 
         # convert to bitfield
@@ -535,7 +597,7 @@ class NeRFRenderer(nn.Module):
             self.mean_count = int(self.step_counter[:total_step, 0].sum().item() / total_step)
         self.local_step = 0
 
-        #print(f'[density grid] min={self.density_grid.min().item():.4f}, max={self.density_grid.max().item():.4f}, mean={self.mean_density:.4f}, occ_rate={(self.density_grid > 0.01).sum() / (128**3 * self.cascade):.3f} | [step counter] mean={self.mean_count}')
+        # print(f'[density grid] min={self.density_grid.min().item():.4f}, max={self.density_grid.max().item():.4f}, mean={self.mean_density:.4f}, occ_rate={(self.density_grid > density_thresh).sum() / (128**3 * self.cascade):.3f} | [step counter] mean={self.mean_count}')
 
 
     def render(self, rays_o, rays_d, staged=False, max_ray_batch=4096, **kwargs):

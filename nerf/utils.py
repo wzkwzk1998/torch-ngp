@@ -493,6 +493,7 @@ class Trainer(object):
 
         if self.opt.color_space == 'linear':
             images[..., :3] = srgb_to_linear(images[..., :3])
+        
 
         if C == 3 or self.model.bg_radius > 0:
             bg_color = 1
@@ -513,6 +514,7 @@ class Trainer(object):
         pred_rgb = outputs['image']
 
         # MSE loss
+        # print(f'pred_rgb: {pred_rgb}\n gt_rgb: {gt_rgb}')
         loss = self.criterion(pred_rgb, gt_rgb).mean(-1) # [B, N, 3] --> [B, N]
 
         # patch-based rendering
@@ -562,6 +564,7 @@ class Trainer(object):
         # loss = loss + loss_ws.mean()
 
         return pred_rgb, gt_rgb, loss
+
 
     def eval_step(self, data):
 
@@ -636,8 +639,8 @@ class Trainer(object):
             self.writer = tensorboardX.SummaryWriter(os.path.join(self.workspace, "run", self.name))
 
         # mark untrained region (i.e., not covered by any camera from the training dataset)
-        if self.model.cuda_ray:
-            self.model.mark_untrained_grid(train_loader._data.poses, train_loader._data.intrinsics)
+        # if self.model.cuda_ray:
+        #     self.model.mark_untrained_grid(train_loader._data.poses, train_loader._data.intrinsics)
 
         # get a ref to error_map
         self.error_map = train_loader._data.error_map
@@ -657,10 +660,12 @@ class Trainer(object):
         if self.use_tensorboardX and self.local_rank == 0:
             self.writer.close()
 
+
     def evaluate(self, loader, name=None):
         self.use_tensorboardX, use_tensorboardX = False, self.use_tensorboardX
         self.evaluate_one_epoch(loader, name)
         self.use_tensorboardX = use_tensorboardX
+
 
     def test(self, loader, save_path=None, name=None, write_video=True):
 
